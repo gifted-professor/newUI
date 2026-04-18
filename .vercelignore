@@ -1,0 +1,7 @@
+node_modules
+.next
+local-connector/data
+local-connector/node_modules
+local-connector/.next
+local-connector/*.log
+local-connector/data/**
