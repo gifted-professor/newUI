@@ -222,7 +222,135 @@ function confidenceTone(label: ConfidenceLabel) {
   return "border-[rgba(248,113,113,0.22)] bg-[rgba(248,113,113,0.08)] text-[#fca5a5]";
 }
 
-function CreatorProfileList({ rows, showReasons, emptyLabel }: { rows: CreatorProfileRow[]; showReasons?: boolean; emptyLabel: string }) {
+function CreatorFact({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-[14px] border border-white/[0.06] bg-white/[0.025] px-3 py-3">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-text-2">{label}</div>
+      <div className="mt-2 break-words text-sm font-semibold text-text-0">{value}</div>
+    </div>
+  );
+}
+
+function CreatorDetailCard({ profile, onClose }: { profile: CreatorProfileRow | null; onClose: () => void }) {
+  if (!profile) {
+    return (
+      <div className="rounded-[18px] border border-dashed border-white/[0.1] bg-white/[0.02] px-5 py-6 text-sm leading-6 text-text-2">
+        从左侧选择一个达人后，这里会展示报价、状态、证据邮件和复核原因。
+      </div>
+    );
+  }
+
+  const evidenceFiles = profile.files?.slice(0, 6) ?? [];
+  const conversations = profile.conversationKeys?.slice(0, 5) ?? [];
+
+  return (
+    <aside className="rounded-[18px] border border-white/[0.08] bg-white/[0.035] p-4 shadow-soft">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] border border-white/[0.08] bg-white/[0.06] text-sm font-semibold text-text-0">
+              {(profile.displayName || "?").slice(0, 2).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold text-text-0">{profile.displayName || "待确认达人"}</div>
+              <div className="mt-1 truncate text-xs text-text-2">{profile.primaryCreatorId || profile.creatorKey}</div>
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-8 rounded-[10px] border border-white/[0.08] bg-white/[0.04] px-3 text-xs text-text-2 transition hover:bg-white/[0.08] hover:text-text-0"
+        >
+          关闭
+        </button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {profile.platforms.map((platform) => (
+          <span key={platform} className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[11px] text-text-2">
+            {platform}
+          </span>
+        ))}
+        <span className={`rounded-full border px-2 py-0.5 text-[11px] ${confidenceTone(profile.confidenceLabel)}`}>
+          置信度 {Math.round(profile.confidence * 100)}%
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+        <CreatorFact label="状态" value={profile.currentStatus || "待人工判断"} />
+        <CreatorFact label="报价" value={joinText(profile.quotedPrices, "暂无报价")} />
+        <CreatorFact label="关键词" value={joinText(profile.matchedKeywords, "无关键词")} />
+        <CreatorFact label="最近回复" value={profile.latestReplyAt || "暂无时间"} />
+        <CreatorFact label="会话" value={profile.conversationCount} />
+        <CreatorFact label="邮件" value={profile.messageCount} />
+      </div>
+
+      {profile.reviewReasons.length ? (
+        <div className="mt-4">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-text-2">复核原因</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {profile.reviewReasons.map((reason) => (
+              <span key={reason} className="rounded-full border border-[rgba(248,113,113,0.18)] bg-[rgba(248,113,113,0.07)] px-2 py-0.5 text-[11px] text-[#fca5a5]">
+                {reason}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {profile.preview ? (
+        <div className="mt-4 rounded-[14px] border border-white/[0.06] bg-black/10 px-3 py-3">
+          <div className="text-[11px] uppercase tracking-[0.14em] text-text-2">邮件摘录</div>
+          <div className="mt-2 max-h-32 overflow-auto text-xs leading-5 text-text-1">{profile.preview}</div>
+        </div>
+      ) : null}
+
+      {conversations.length || evidenceFiles.length ? (
+        <div className="mt-4 space-y-3">
+          {conversations.length ? (
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-text-2">会话证据</div>
+              <div className="mt-2 space-y-1">
+                {conversations.map((conversation) => (
+                  <div key={conversation} className="truncate rounded-[10px] bg-white/[0.03] px-2 py-1 text-xs text-text-2">
+                    {conversation}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {evidenceFiles.length ? (
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.14em] text-text-2">原始邮件文件</div>
+              <div className="mt-2 space-y-1">
+                {evidenceFiles.map((file) => (
+                  <div key={file} className="truncate rounded-[10px] bg-white/[0.03] px-2 py-1 text-xs text-text-2">
+                    {file}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function CreatorProfileList({
+  rows,
+  showReasons,
+  emptyLabel,
+  selectedKey,
+  onSelect,
+}: {
+  rows: CreatorProfileRow[];
+  showReasons?: boolean;
+  emptyLabel: string;
+  selectedKey?: string | null;
+  onSelect: (profile: CreatorProfileRow) => void;
+}) {
   if (!rows.length) {
     return (
       <div className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-5 text-sm text-text-2">
@@ -234,7 +362,14 @@ function CreatorProfileList({ rows, showReasons, emptyLabel }: { rows: CreatorPr
   return (
     <div className="space-y-2">
       {rows.map((profile) => (
-        <div key={profile.creatorKey} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+        <button
+          key={profile.creatorKey}
+          type="button"
+          onClick={() => onSelect(profile)}
+          className={`w-full rounded-[16px] border px-4 py-3 text-left transition hover:border-white/[0.16] hover:bg-white/[0.045] ${
+            selectedKey === profile.creatorKey ? "border-white/[0.18] bg-white/[0.06]" : "border-white/[0.06] bg-white/[0.02]"
+          }`}
+        >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -264,6 +399,7 @@ function CreatorProfileList({ rows, showReasons, emptyLabel }: { rows: CreatorPr
                 <div className="text-text-2">邮件</div>
                 <div className="mt-1 font-semibold text-text-0">{profile.messageCount}</div>
               </div>
+              <div className="col-span-2 text-[11px] text-text-2">点击查看达人卡片</div>
             </div>
           </div>
           {profile.preview ? <div className="mt-3 max-h-10 overflow-hidden text-xs leading-5 text-text-1">{profile.preview}</div> : null}
@@ -276,7 +412,7 @@ function CreatorProfileList({ rows, showReasons, emptyLabel }: { rows: CreatorPr
               ))}
             </div>
           ) : null}
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -294,6 +430,7 @@ export function HistoryImportPanel() {
   );
   const [localLimit, setLocalLimit] = useState("300");
   const [activeResultView, setActiveResultView] = useState<ResultView>("leads");
+  const [selectedCreatorKey, setSelectedCreatorKey] = useState<string | null>(null);
 
   async function refresh() {
     const provider = await resolveHistoryImportProviderName();
@@ -383,6 +520,11 @@ export function HistoryImportPanel() {
   }
 
   const latest = imports[0] ?? null;
+
+  useEffect(() => {
+    setSelectedCreatorKey(null);
+  }, [latest?.id, activeResultView]);
+
   const leadRows = useMemo(() => latest?.result?.leadReviewRows ?? [], [latest]);
   const previewRows = useMemo(() => leadRows.slice(0, 50), [leadRows]);
   const creatorProfiles = useMemo(() => {
@@ -391,6 +533,10 @@ export function HistoryImportPanel() {
   }, [latest, leadRows]);
   const creatorRows = useMemo(() => creatorProfiles.filter((profile) => profile.primaryCreatorId).slice(0, 80), [creatorProfiles]);
   const reviewRows = useMemo(() => creatorProfiles.filter((profile) => profile.needsReview).slice(0, 80), [creatorProfiles]);
+  const selectedCreatorProfile = useMemo(
+    () => creatorProfiles.find((profile) => profile.creatorKey === selectedCreatorKey) ?? null,
+    [creatorProfiles, selectedCreatorKey],
+  );
   const totalCreatorRows = creatorProfiles.filter((profile) => profile.primaryCreatorId).length;
   const totalReviewRows = creatorProfiles.filter((profile) => profile.needsReview).length;
   const hasCompletedWithoutHits = Boolean(latest?.status === "completed" && latest.result && latest.result.stats.checked > 0 && latest.result.stats.parsed > 0 && latest.result.stats.failed === 0 && latest.result.stats.matched === 0);
@@ -558,7 +704,17 @@ export function HistoryImportPanel() {
                   <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
                     达人库：显示 {creatorRows.length} / {totalCreatorRows || creatorProfileCount}
                   </div>
-                  <CreatorProfileList rows={creatorRows} emptyLabel="当前结果还没有足够信息聚合成达人；可以放宽关键词或扫更多邮件。" />
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+                    <CreatorProfileList
+                      rows={creatorRows}
+                      selectedKey={selectedCreatorKey}
+                      onSelect={(profile) => setSelectedCreatorKey(profile.creatorKey)}
+                      emptyLabel="当前结果还没有足够信息聚合成达人；可以放宽关键词或扫更多邮件。"
+                    />
+                    <div className="lg:sticky lg:top-5 lg:self-start">
+                      <CreatorDetailCard profile={selectedCreatorProfile} onClose={() => setSelectedCreatorKey(null)} />
+                    </div>
+                  </div>
                 </>
               ) : null}
 
@@ -567,7 +723,18 @@ export function HistoryImportPanel() {
                   <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
                     待复核：显示 {reviewRows.length} / {totalReviewRows}
                   </div>
-                  <CreatorProfileList rows={reviewRows} showReasons emptyLabel="这一批没有需要人工补判断的达人线索。" />
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+                    <CreatorProfileList
+                      rows={reviewRows}
+                      showReasons
+                      selectedKey={selectedCreatorKey}
+                      onSelect={(profile) => setSelectedCreatorKey(profile.creatorKey)}
+                      emptyLabel="这一批没有需要人工补判断的达人线索。"
+                    />
+                    <div className="lg:sticky lg:top-5 lg:self-start">
+                      <CreatorDetailCard profile={selectedCreatorProfile} onClose={() => setSelectedCreatorKey(null)} />
+                    </div>
+                  </div>
                 </>
               ) : null}
             </>
