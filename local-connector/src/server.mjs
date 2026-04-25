@@ -3,14 +3,16 @@ import { appendLog } from "./logs/logger.mjs";
 import { getScopesForProvider, normalizeProvider } from "./adapters/provider-registry.mjs";
 import { connectImapMailbox } from "./adapters/imap-adapter.mjs";
 import { parseMultipartFormData } from "./host/parse-form-data.mjs";
-import { sendJson, parseJsonBody } from "./host/json-response.mjs";
+import { applyCorsHeaders, isAuthorized, isOriginAllowed, parseJsonBody, sendJson } from "./host/json-response.mjs";
 import { listImportArtifacts, runHistoryImportTask } from "./runtime/history-import-runner.mjs";
 import { getJob, listJobs, startParseRun } from "./runtime/parse-runner.mjs";
-import { createHistoryImport, getHistoryImport, listHistoryImports, updateHistoryImport } from "./storage/history-import-store.mjs";
+import { createHistoryImport, getHistoryImport, isSafeHistoryImportId, listHistoryImports, updateHistoryImport } from "./storage/history-import-store.mjs";
 import { saveUploadedZipAndExtract } from "./storage/history-import-upload.mjs";
+import { resolveAllowedCorpusPath } from "./storage/local-import-paths.mjs";
 import { readState, updateState } from "./store/state-store.mjs";
 
 const PORT = process.env.LOCAL_CONNECTOR_PORT || 48721;
+const HOST = process.env.LOCAL_CONNECTOR_HOST || "127.0.0.1";
 
 function notFound(res) {
   sendJson(res, 404, {
@@ -26,8 +28,24 @@ const server = createServer(async (req, res) => {
 
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
 
+  if (!isOriginAllowed(req)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: { code: "FORBIDDEN_ORIGIN", message: "不允许的来源。" },
+    });
+  }
+
+  applyCorsHeaders(req, res);
+
   if (req.method === "OPTIONS") {
     return sendJson(res, 200, { ok: true });
+  }
+
+  if (!isAuthorized(req, url.pathname)) {
+    return sendJson(res, 401, {
+      ok: false,
+      error: { code: "UNAUTHORIZED", message: "本地连接器授权失败。" },
+    });
   }
 
   try {
@@ -199,12 +217,40 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/v1/history-imports") {
       const body = await parseJsonBody(req);
-      const item = await createHistoryImport({
-        id: typeof body.id === "string" ? body.id : undefined,
-        corpusPath: typeof body.corpusPath === "string" ? body.corpusPath : "",
-        keywords: Array.isArray(body.keywords) ? body.keywords.filter((entry) => typeof entry === "string") : [],
-        limit: typeof body.limit === "number" ? body.limit : 0,
-      });
+      let corpusPath = "";
+
+      if (typeof body.corpusPath === "string" && body.corpusPath.trim()) {
+        try {
+          corpusPath = await resolveAllowedCorpusPath(body.corpusPath);
+        } catch (error) {
+          return sendJson(res, 400, {
+            ok: false,
+            error: { code: "INVALID_INPUT", message: error instanceof Error ? error.message : "本地目录不可用。" },
+          });
+        }
+      }
+
+      let item;
+      try {
+        item = await createHistoryImport({
+          id: typeof body.id === "string" ? body.id : undefined,
+          corpusPath,
+          keywords: Array.isArray(body.keywords) ? body.keywords.filter((entry) => typeof entry === "string") : [],
+          limit: typeof body.limit === "number" ? body.limit : 0,
+        });
+      } catch (error) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: { code: "INVALID_INPUT", message: error instanceof Error ? error.message : "历史解析任务创建失败。" },
+        });
+      }
+
+      if (corpusPath) {
+        queueMicrotask(() => {
+          runHistoryImportTask({ id: item.id, corpusPath, keywords: item.keywords, limit: item.limit }).catch(() => null);
+        });
+      }
+
       return sendJson(res, 200, { ok: true, data: item });
     }
 
@@ -223,6 +269,12 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname.startsWith("/v1/history-imports/") && url.pathname.endsWith("/upload")) {
       const importId = url.pathname.replace("/v1/history-imports/", "").replace("/upload", "");
+      if (!isSafeHistoryImportId(importId)) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: { code: "INVALID_INPUT", message: "历史解析任务 ID 不合法。" },
+        });
+      }
       const formData = await parseMultipartFormData(req);
       const file = formData.getFile("file");
       if (!file) {
@@ -251,7 +303,15 @@ const server = createServer(async (req, res) => {
         item = await createHistoryImport({ id: importId, corpusPath: "", keywords: parsedKeywords, limit: parsedLimit });
       }
 
-      const saved = await saveUploadedZipAndExtract(importId, file);
+      let saved;
+      try {
+        saved = await saveUploadedZipAndExtract(importId, file);
+      } catch (error) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: { code: "INVALID_UPLOAD", message: error instanceof Error ? error.message : "上传文件无效。" },
+        });
+      }
       const effectiveKeywords = parsedKeywords.length ? parsedKeywords : item.keywords;
       const effectiveLimit = parsedLimit > 0 ? parsedLimit : item.limit;
       const latest = await updateHistoryImport(importId, {
@@ -309,7 +369,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, async () => {
-  await appendLog("info", `本地连接器已启动： http://127.0.0.1:${PORT}/v1/health`);
-  console.log(`local-connector listening on http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, async () => {
+  await appendLog("info", `本地连接器已启动： http://${HOST}:${PORT}/v1/health`);
+  if (!process.env.LOCAL_CONNECTOR_TOKEN) {
+    await appendLog("info", "LOCAL_CONNECTOR_TOKEN 未配置，仅依赖 loopback 与 Origin 限制。");
+  }
+  console.log(`local-connector listening on http://${HOST}:${PORT}`);
 });

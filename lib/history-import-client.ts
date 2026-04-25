@@ -1,4 +1,4 @@
-import { resolveHistoryImportProviderName } from "@/lib/history-import-provider";
+import { resolveHistoryImportProviderName, type HistoryImportProviderName } from "@/lib/history-import-provider";
 import {
   createLocalHistoryImport,
   getLocalHistoryImport,
@@ -54,20 +54,36 @@ async function getWebHistoryImport(id: string) {
 
 export async function listHistoryImports() {
   const provider = await resolveHistoryImportProviderName();
-  return provider === "local" ? listLocalHistoryImports() : listWebHistoryImports();
+  return listHistoryImportsForProvider(provider);
 }
 
 export async function createHistoryImport(payload: CreatePayload) {
   const provider = await resolveHistoryImportProviderName();
-  return provider === "local" ? createLocalHistoryImport(payload) : createWebHistoryImport(payload);
+  return createHistoryImportForProvider(provider, payload);
 }
 
 export async function uploadHistoryImportZip(id: string, file: File, options?: UploadOptions) {
   const provider = await resolveHistoryImportProviderName();
-  return provider === "local" ? uploadLocalHistoryImportZip(id, file, options) : uploadWebHistoryImportZip(id, file, options);
+  return uploadHistoryImportZipForProvider(provider, id, file, options);
 }
 
 export async function getHistoryImport(id: string) {
   const provider = await resolveHistoryImportProviderName();
+  return getHistoryImportForProvider(provider, id);
+}
+
+export async function listHistoryImportsForProvider(provider: HistoryImportProviderName) {
+  return provider === "local" ? listLocalHistoryImports() : listWebHistoryImports();
+}
+
+export async function createHistoryImportForProvider(provider: HistoryImportProviderName, payload: CreatePayload) {
+  return provider === "local" ? createLocalHistoryImport(payload) : createWebHistoryImport(payload);
+}
+
+export async function uploadHistoryImportZipForProvider(provider: HistoryImportProviderName, id: string, file: File, options?: UploadOptions) {
+  return provider === "local" ? uploadLocalHistoryImportZip(id, file, options) : uploadWebHistoryImportZip(id, file, options);
+}
+
+export async function getHistoryImportForProvider(provider: HistoryImportProviderName, id: string) {
   return provider === "local" ? getLocalHistoryImport(id) : getWebHistoryImport(id);
 }

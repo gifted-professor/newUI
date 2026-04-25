@@ -30,6 +30,16 @@ const runtimeRoot = process.env.VERCEL ? "/tmp/newui-history-imports" : path.res
 const dataDir = runtimeRoot;
 const stateFile = path.join(dataDir, "imports.json");
 
+export function isSafeHistoryImportId(id: string) {
+  return typeof id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(id);
+}
+
+export function assertSafeHistoryImportId(id: string) {
+  if (!isSafeHistoryImportId(id)) {
+    throw new Error("历史解析任务 ID 不合法。");
+  }
+}
+
 function createDefaultState(): HistoryImportState {
   return { items: [] };
 }
@@ -56,14 +66,17 @@ export async function listHistoryImports(): Promise<HistoryImportItem[]> {
 }
 
 export async function getHistoryImport(id: string): Promise<HistoryImportItem | null> {
+  if (!isSafeHistoryImportId(id)) return null;
   const state = await ensureStore();
   return state.items.find((item) => item.id === id) ?? null;
 }
 
 export async function createHistoryImport(payload: { id?: string; corpusPath?: string; keywords: string[]; limit?: number }): Promise<HistoryImportItem> {
   const state = await ensureStore();
+  const nextId = payload.id || `hist_${Date.now()}`;
+  assertSafeHistoryImportId(nextId);
   const item: HistoryImportItem = {
-    id: payload.id || `hist_${Date.now()}`,
+    id: nextId,
     status: "created",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -78,6 +91,7 @@ export async function createHistoryImport(payload: { id?: string; corpusPath?: s
 }
 
 export async function updateHistoryImport(id: string, patch: Partial<HistoryImportItem>): Promise<HistoryImportItem | null> {
+  if (!isSafeHistoryImportId(id)) return null;
   const state = await ensureStore();
   const item = state.items.find((entry) => entry.id === id);
   if (!item) return null;

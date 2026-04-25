@@ -6,6 +6,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(__dirname, "../../data/history-imports");
 const stateFile = path.join(dataDir, "imports.json");
 
+export function isSafeHistoryImportId(id) {
+  return typeof id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(id);
+}
+
+export function assertSafeHistoryImportId(id) {
+  if (!isSafeHistoryImportId(id)) {
+    throw new Error("历史解析任务 ID 不合法。");
+  }
+}
+
 function createDefaultState() {
   return { items: [] };
 }
@@ -32,14 +42,17 @@ export async function listHistoryImports() {
 }
 
 export async function getHistoryImport(id) {
+  if (!isSafeHistoryImportId(id)) return null;
   const state = await ensureStore();
   return state.items.find((item) => item.id === id) || null;
 }
 
 export async function createHistoryImport({ id, corpusPath = "", keywords = [], limit = 0 }) {
   const state = await ensureStore();
+  const nextId = id || `hist_local_${Date.now()}`;
+  assertSafeHistoryImportId(nextId);
   const item = {
-    id: id || `hist_local_${Date.now()}`,
+    id: nextId,
     status: "created",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -54,6 +67,7 @@ export async function createHistoryImport({ id, corpusPath = "", keywords = [], 
 }
 
 export async function updateHistoryImport(id, patch) {
+  if (!isSafeHistoryImportId(id)) return null;
   const state = await ensureStore();
   const item = state.items.find((entry) => entry.id === id);
   if (!item) return null;

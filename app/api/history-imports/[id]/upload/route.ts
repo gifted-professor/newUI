@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { runHistoryImportTask } from "@/lib/server/history-import-runner";
-import { createHistoryImport, getHistoryImport, updateHistoryImport } from "@/lib/server/history-import-store";
+import { createHistoryImport, getHistoryImport, isSafeHistoryImportId, updateHistoryImport } from "@/lib/server/history-import-store";
 import { saveUploadedZipAndExtract } from "@/lib/server/history-import-upload";
+
+const maxUploadBytes = 50 * 1024 * 1024;
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -10,9 +12,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ message: "未登录。" }, { status: 401 });
   }
 
+  const contentLength = Number(request.headers.get("content-length") || 0);
+  if (contentLength > maxUploadBytes) {
+    return NextResponse.json({ message: "ZIP 文件过大。" }, { status: 400 });
+  }
+
   const { id } = await params;
+  if (!isSafeHistoryImportId(id)) {
+    return NextResponse.json({ message: "历史解析任务 ID 不合法。" }, { status: 400 });
+  }
+
   const formData = await request.formData();
-   const keywordsValue = formData.get("keywords");
+  const keywordsValue = formData.get("keywords");
   const limitValue = formData.get("limit");
   const parsedKeywords = typeof keywordsValue === "string"
     ? (() => {
@@ -36,7 +47,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ message: "请上传 ZIP 文件。" }, { status: 400 });
   }
 
-  const saved = await saveUploadedZipAndExtract(id, file);
+  let saved;
+  try {
+    saved = await saveUploadedZipAndExtract(id, file);
+  } catch (error) {
+    return NextResponse.json({ message: error instanceof Error ? error.message : "上传文件无效。" }, { status: 400 });
+  }
   const effectiveKeywords = parsedKeywords.length ? parsedKeywords : item.keywords;
   const effectiveLimit = parsedLimit > 0 ? parsedLimit : item.limit;
   const latest = await updateHistoryImport(id, {

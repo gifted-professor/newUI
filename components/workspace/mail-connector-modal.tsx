@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { buildLocalConnectorHeaders, LOCAL_CONNECTOR_BASE } from "@/lib/local-connector";
 import { mailProviders } from "@/lib/mail-provider-content";
 import type { SavedMailConfig } from "@/types/mail-connector";
 
@@ -12,8 +13,6 @@ type ConnectorState =
   | { status: "success"; message: string }
   | { status: "error"; message: string }
   | { status: "loading"; message: string };
-
-const LOCAL_CONNECTOR_BASE = process.env.NEXT_PUBLIC_LOCAL_CONNECTOR_BASE || "http://127.0.0.1:48721/v1";
 
 export function MailConnectorModal({
   open,
@@ -64,9 +63,9 @@ export function MailConnectorModal({
 
       const response = await fetch(`${LOCAL_CONNECTOR_BASE}/mail/connect`, {
         method: "POST",
-        headers: {
+        headers: buildLocalConnectorHeaders({
           "Content-Type": "application/json",
-        },
+        }),
         body: JSON.stringify({
           provider: providerKey,
           authMode: provider?.mode === "oauth" ? "oauth" : "app_password",

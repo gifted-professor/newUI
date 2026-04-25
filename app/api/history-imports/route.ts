@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { runHistoryImportTask } from "@/lib/server/history-import-runner";
 import { createHistoryImport, listHistoryImports } from "@/lib/server/history-import-store";
 
 export async function GET() {
@@ -20,29 +19,18 @@ export async function POST(request: Request) {
   }
 
   const payload = (await request.json()) as { corpusPath?: string; keywords?: string[]; limit?: number };
-  const corpusPath = payload.corpusPath?.trim() || "";
+  if (payload.corpusPath?.trim()) {
+    return NextResponse.json({ message: "历史解析仅支持通过 ZIP 上传创建任务。" }, { status: 400 });
+  }
+
   const keywords = Array.isArray(payload.keywords) ? payload.keywords : [];
   const limit = payload.limit ?? 0;
 
   const item = await createHistoryImport({
-    corpusPath,
+    corpusPath: "",
     keywords,
     limit,
   });
-
-  if (corpusPath) {
-    queueMicrotask(() => {
-      runHistoryImportTask({
-        id: item.id,
-        corpusPath,
-        keywords,
-        limit,
-      }).catch(async (error) => {
-        const { updateHistoryImport } = await import("@/lib/server/history-import-store");
-        await updateHistoryImport(item.id, { status: "failed", error: error instanceof Error ? error.message : "任务失败" });
-      });
-    });
-  }
 
   return NextResponse.json({ ok: true, data: item });
 }

@@ -1,9 +1,19 @@
 export const LOCAL_CONNECTOR_BASE = process.env.NEXT_PUBLIC_LOCAL_CONNECTOR_BASE || "http://127.0.0.1:48721/v1";
+const LOCAL_CONNECTOR_TOKEN = process.env.NEXT_PUBLIC_LOCAL_CONNECTOR_TOKEN || "";
+
+export function buildLocalConnectorHeaders(headers?: HeadersInit) {
+  const nextHeaders = new Headers(headers);
+  if (LOCAL_CONNECTOR_TOKEN) {
+    nextHeaders.set("Authorization", `Bearer ${LOCAL_CONNECTOR_TOKEN}`);
+  }
+  return nextHeaders;
+}
 
 export async function isLocalConnectorReachable() {
   try {
     const response = await fetch(`${LOCAL_CONNECTOR_BASE}/health`, {
       cache: "no-store",
+      headers: buildLocalConnectorHeaders(),
       signal: AbortSignal.timeout(1200),
     });
     return response.ok;
@@ -13,14 +23,14 @@ export async function isLocalConnectorReachable() {
 }
 
 export async function fetchConnectorStatus() {
-  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/status`, { cache: "no-store" });
+  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/status`, { cache: "no-store", headers: buildLocalConnectorHeaders() });
   if (!response.ok) throw new Error("无法获取本地连接器状态");
   const data = await response.json();
   return data?.data ?? null;
 }
 
 export async function fetchConnectorScopes() {
-  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/mail/scopes`, { cache: "no-store" });
+  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/mail/scopes`, { cache: "no-store", headers: buildLocalConnectorHeaders() });
   if (!response.ok) throw new Error("无法获取抓取范围");
   const data = await response.json();
   return data?.data ?? null;
@@ -38,9 +48,9 @@ type SaveConnectorScopesPayload = {
 export async function saveConnectorScopes(payload: SaveConnectorScopesPayload) {
   const response = await fetch(`${LOCAL_CONNECTOR_BASE}/mail/scopes`, {
     method: "POST",
-    headers: {
+    headers: buildLocalConnectorHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(payload),
   });
 
@@ -54,9 +64,9 @@ export async function saveConnectorScopes(payload: SaveConnectorScopesPayload) {
 export async function startConnectorRun(limit?: number) {
   const response = await fetch(`${LOCAL_CONNECTOR_BASE}/parse/run`, {
     method: "POST",
-    headers: {
+    headers: buildLocalConnectorHeaders({
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(typeof limit === "number" ? { limit } : {}),
   });
 
@@ -68,7 +78,10 @@ export async function startConnectorRun(limit?: number) {
 }
 
 export async function fetchConnectorLogs(limit = 50) {
-  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/logs?limit=${limit}`, { cache: "no-store" });
+  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/logs?limit=${limit}`, {
+    cache: "no-store",
+    headers: buildLocalConnectorHeaders(),
+  });
   const data = await response.json();
   if (!response.ok || !data?.ok) {
     throw new Error(data?.error?.message || "无法获取本地运行日志");
@@ -77,7 +90,7 @@ export async function fetchConnectorLogs(limit = 50) {
 }
 
 export async function fetchConnectorJobs() {
-  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/jobs`, { cache: "no-store" });
+  const response = await fetch(`${LOCAL_CONNECTOR_BASE}/jobs`, { cache: "no-store", headers: buildLocalConnectorHeaders() });
   const data = await response.json();
   if (!response.ok || !data?.ok) {
     throw new Error(data?.error?.message || "无法获取本地任务状态");

@@ -1,4 +1,6 @@
-export async function parseMultipartFormData(req) {
+const DEFAULT_MULTIPART_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
+
+export async function parseMultipartFormData(req, { maxBytes = DEFAULT_MULTIPART_BODY_LIMIT_BYTES } = {}) {
   const contentType = req.headers["content-type"] || "";
   const boundaryMatch = contentType.match(/boundary=(?:(?:"([^"]+)")|([^;]+))/i);
   const boundary = boundaryMatch?.[1] || boundaryMatch?.[2];
@@ -7,7 +9,14 @@ export async function parseMultipartFormData(req) {
   }
 
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      throw new Error("上传文件过大。");
+    }
+    chunks.push(chunk);
+  }
   const body = Buffer.concat(chunks);
   const delimiter = Buffer.from(`--${boundary}`);
   const parts = [];
