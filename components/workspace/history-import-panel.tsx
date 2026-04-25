@@ -45,6 +45,10 @@ type HistoryImportItem = {
       preview: string;
     }>;
   };
+  artifacts?: {
+    fileCount: number;
+    sampleFiles: string[];
+  };
   error?: string;
 };
 
@@ -162,9 +166,11 @@ export function HistoryImportPanel() {
   }
 
   const latest = imports[0] ?? null;
-  const topRows = useMemo(() => latest?.result?.leadReviewRows?.slice(0, 5) ?? [], [latest]);
+  const previewRows = useMemo(() => latest?.result?.leadReviewRows?.slice(0, 50) ?? [], [latest]);
   const hasCompletedWithoutHits = Boolean(latest?.status === "completed" && latest.result && latest.result.stats.checked > 0 && latest.result.stats.parsed > 0 && latest.result.stats.failed === 0 && latest.result.stats.matched === 0);
   const failedItemCount = latest?.result?.items?.filter((item) => item.error).length ?? 0;
+  const totalLeadRows = latest?.result?.leadReviewRows?.length ?? 0;
+  const checkedLimitLabel = latest?.limit ? `上限 ${latest.limit}` : "不限制";
 
   return (
     <Card className="mt-4 p-5 sm:p-6">
@@ -256,14 +262,18 @@ export function HistoryImportPanel() {
                 </div>
               ) : null}
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">检查邮件</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.checked}</div><div className="mt-1 text-xs text-text-2">成功 {latest.result.stats.parsed} · 失败 {latest.result.stats.failed}</div></div>
+                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">检查邮件</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.checked}</div><div className="mt-1 text-xs text-text-2">{checkedLimitLabel}{latest.artifacts?.fileCount ? ` · 目录 ${latest.artifacts.fileCount}` : ""} · 成功 {latest.result.stats.parsed} · 失败 {latest.result.stats.failed}</div></div>
                 <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">关键词命中</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.matched}</div><div className="mt-1 text-xs text-text-2">过滤 {latest.result.stats.filteredOut}</div></div>
                 <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">会话数</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.conversationGroups}</div></div>
                 <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">待人工复核</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.manualReview}</div></div>
               </div>
 
+              <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
+                线索预览：显示 {previewRows.length} / {totalLeadRows}
+              </div>
+
               <div className="space-y-3">
-                {topRows.map((row, index) => (
+                {previewRows.map((row, index) => (
                   <div key={index} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-4">
                     <div className="flex flex-wrap items-center gap-2 text-xs text-text-2">
                       <span>{row.priority}</span>
