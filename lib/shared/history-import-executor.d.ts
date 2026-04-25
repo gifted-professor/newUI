@@ -10,10 +10,12 @@ export type HistoryImportResult = {
     withPrice: number;
     withCreator: number;
     manualReview: number;
+    creatorProfiles: number;
   };
   items: Array<Record<string, unknown>>;
   conversationGroups: Array<Record<string, unknown>>;
   leadReviewRows: Array<Record<string, unknown>>;
+  creatorProfiles: Array<Record<string, unknown>>;
 };
 
 export function executeHistoryImport(args: { corpusPath: string; keywords?: string[]; limit?: number }): Promise<HistoryImportResult>;

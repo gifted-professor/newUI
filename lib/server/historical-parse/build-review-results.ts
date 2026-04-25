@@ -16,6 +16,26 @@ export type ParsedItem = {
   parsedBody: { messageId: string | null; inReplyTo: string | null; references: string | null; from: string | null };
 };
 
+export type CreatorProfile = {
+  creatorKey: string;
+  displayName: string;
+  primaryCreatorId: string | null;
+  platforms: string[];
+  matchedKeywords: string[];
+  quotedPrices: string[];
+  currentStatus: string;
+  latestReplyAt: string | null;
+  conversationCount: number;
+  messageCount: number;
+  confidence: number;
+  confidenceLabel: "high" | "medium" | "low";
+  needsReview: boolean;
+  reviewReasons: string[];
+  conversationKeys: string[];
+  files: string[];
+  preview: string;
+};
+
 const HIT_WEIGHTS: Record<string, number> = { subject: 5, creatorId: 5, from: 4, to: 3, platform: 3, fullBody: 1 };
 
 export function formatPrice(quotedPrice: ParsedItem["quotedPrice"]) {
@@ -25,6 +45,10 @@ export function formatPrice(quotedPrice: ParsedItem["quotedPrice"]) {
 
 function normalizeKeyword(value: string) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeCreatorKey(value: string) {
+  return String(value || "").trim().replace(/^@/, "").toLowerCase();
 }
 
 function normalizeSubject(value: string) {
@@ -153,4 +177,123 @@ export function buildConversationGroups(items: ParsedItem[]) {
 
 export function buildLeadReviewRows(conversationGroups: ReturnType<typeof buildConversationGroups>) {
   return conversationGroups.map((group) => ({ priority: choosePriority(group), matchedKeywords: group.matchedKeywords, hitScoreMax: group.hitScoreMax, messageCount: group.messageCount, latestReplyAt: group.latestReplyAt, creatorIds: group.creatorIds, platforms: group.platforms, quotedPrices: group.quotedPrices, intents: group.intents, currentStatus: group.currentStatus, needsManualReview: group.manualReviewCount > 0, nextAction: chooseNextAction(group), preview: group.preview, conversationKey: group.conversationKey }));
+}
+
+function clampConfidence(value: number) {
+  return Math.max(0.1, Math.min(0.98, Number(value.toFixed(2))));
+}
+
+function chooseConfidenceLabel(confidence: number): CreatorProfile["confidenceLabel"] {
+  if (confidence >= 0.78) return "high";
+  if (confidence >= 0.55) return "medium";
+  return "low";
+}
+
+function pickLatestStatus(current: string, candidate: string, currentAt: string | null, candidateAt: string | null) {
+  if (!current) return candidate;
+  if (!candidate) return current;
+  if (!currentAt) return candidate;
+  if (!candidateAt) return current;
+  return candidateAt >= currentAt ? candidate : current;
+}
+
+function buildReviewReasons(group: any, creatorId: string | null) {
+  const reasons: string[] = [];
+  if (!creatorId) reasons.push("缺达人ID");
+  if (!group.platforms?.length) reasons.push("缺平台");
+  if (!group.quotedPrices?.length) reasons.push("缺报价");
+  if ((group.creatorIds || []).length > 1) reasons.push("多达人候选");
+  if ((group.manualReviewCount || 0) > 0) reasons.push("邮件需复核");
+  return reasons;
+}
+
+function scoreCreatorGroup(group: any, creatorId: string | null) {
+  let score = 0.28;
+  if (creatorId) score += 0.28;
+  if (group.platforms?.length) score += 0.18;
+  if (group.quotedPrices?.length) score += 0.16;
+  if ((group.messageCount || 0) > 1) score += 0.08;
+  if ((group.creatorIds || []).length > 1) score -= 0.14;
+  if ((group.manualReviewCount || 0) > 0) score -= 0.08;
+  return clampConfidence(score);
+}
+
+export function buildCreatorProfiles(conversationGroups: ReturnType<typeof buildConversationGroups>): CreatorProfile[] {
+  const profiles = new Map<string, any>();
+
+  for (const group of conversationGroups as any[]) {
+    const creatorIds = group.creatorIds?.length ? group.creatorIds : [null];
+    for (const creatorId of creatorIds) {
+      const normalizedCreator = creatorId ? normalizeCreatorKey(creatorId) : "";
+      const primaryPlatform = group.platforms?.[0] || "unknown";
+      const creatorKey = normalizedCreator
+        ? `${String(primaryPlatform).toLowerCase()}:${normalizedCreator}`
+        : `review:${group.conversationKey}`;
+      const existing = profiles.get(creatorKey) || {
+        creatorKey,
+        displayName: creatorId || "待确认达人",
+        primaryCreatorId: creatorId,
+        platforms: new Set<string>(),
+        matchedKeywords: new Set<string>(),
+        quotedPrices: new Set<string>(),
+        currentStatus: "",
+        latestReplyAt: null,
+        conversationCount: 0,
+        messageCount: 0,
+        confidenceScores: [],
+        reviewReasons: new Set<string>(),
+        conversationKeys: new Set<string>(),
+        files: new Set<string>(),
+        preview: group.preview || "",
+      };
+
+      for (const platform of group.platforms || []) existing.platforms.add(platform);
+      for (const keyword of group.matchedKeywords || []) existing.matchedKeywords.add(keyword);
+      for (const price of group.quotedPrices || []) existing.quotedPrices.add(price);
+      for (const reason of buildReviewReasons(group, creatorId)) existing.reviewReasons.add(reason);
+      for (const file of group.files || []) existing.files.add(file);
+
+      existing.conversationCount += 1;
+      existing.messageCount += group.messageCount || 0;
+      existing.conversationKeys.add(group.conversationKey);
+      existing.confidenceScores.push(scoreCreatorGroup(group, creatorId));
+      existing.currentStatus = pickLatestStatus(existing.currentStatus, group.currentStatus, existing.latestReplyAt, group.latestReplyAt);
+      if (!existing.latestReplyAt || (group.latestReplyAt && group.latestReplyAt > existing.latestReplyAt)) {
+        existing.latestReplyAt = group.latestReplyAt || existing.latestReplyAt;
+        existing.preview = group.preview || existing.preview;
+      }
+
+      profiles.set(creatorKey, existing);
+    }
+  }
+
+  return [...profiles.values()]
+    .map((profile) => {
+      const averageConfidence = profile.confidenceScores.length
+        ? profile.confidenceScores.reduce((sum: number, item: number) => sum + item, 0) / profile.confidenceScores.length
+        : 0.1;
+      const confidence = clampConfidence(averageConfidence + Math.min(0.12, Math.max(0, profile.conversationCount - 1) * 0.03));
+      const reviewReasons = [...profile.reviewReasons];
+      if (confidence < 0.55) reviewReasons.push("低置信度");
+      return {
+        creatorKey: profile.creatorKey,
+        displayName: profile.displayName,
+        primaryCreatorId: profile.primaryCreatorId,
+        platforms: [...profile.platforms].sort(),
+        matchedKeywords: [...profile.matchedKeywords].sort(),
+        quotedPrices: [...profile.quotedPrices].slice(0, 5),
+        currentStatus: profile.currentStatus || "待人工判断",
+        latestReplyAt: profile.latestReplyAt,
+        conversationCount: profile.conversationCount,
+        messageCount: profile.messageCount,
+        confidence,
+        confidenceLabel: chooseConfidenceLabel(confidence),
+        needsReview: reviewReasons.length > 0,
+        reviewReasons: [...new Set(reviewReasons)],
+        conversationKeys: [...profile.conversationKeys],
+        files: [...profile.files].slice(0, 10),
+        preview: profile.preview,
+      } satisfies CreatorProfile;
+    })
+    .sort((a, b) => Number(b.primaryCreatorId != null) - Number(a.primaryCreatorId != null) || b.confidence - a.confidence || b.messageCount - a.messageCount);
 }

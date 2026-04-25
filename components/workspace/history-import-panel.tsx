@@ -10,6 +10,46 @@ import {
 } from "@/lib/history-import-client";
 import { resolveHistoryImportProviderName, type HistoryImportProviderName } from "@/lib/history-import-provider";
 
+type ResultView = "leads" | "creators" | "review";
+type ConfidenceLabel = "high" | "medium" | "low";
+
+type LeadReviewRow = {
+  priority: string;
+  matchedKeywords: string[];
+  hitScoreMax?: number;
+  messageCount?: number;
+  latestReplyAt?: string | null;
+  currentStatus: string;
+  creatorIds: string[];
+  platforms?: string[];
+  quotedPrices: string[];
+  intents?: string[];
+  needsManualReview?: boolean;
+  nextAction: string;
+  preview: string;
+  conversationKey?: string;
+};
+
+type CreatorProfileRow = {
+  creatorKey: string;
+  displayName: string;
+  primaryCreatorId: string | null;
+  platforms: string[];
+  matchedKeywords: string[];
+  quotedPrices: string[];
+  currentStatus: string;
+  latestReplyAt: string | null;
+  conversationCount: number;
+  messageCount: number;
+  confidence: number;
+  confidenceLabel: ConfidenceLabel;
+  needsReview: boolean;
+  reviewReasons: string[];
+  conversationKeys?: string[];
+  files?: string[];
+  preview: string;
+};
+
 type HistoryImportItem = {
   id: string;
   status: string;
@@ -30,20 +70,14 @@ type HistoryImportItem = {
       withPrice: number;
       withCreator: number;
       manualReview: number;
+      creatorProfiles?: number;
     };
     items?: Array<{
       fileName: string;
       error?: string;
     }>;
-    leadReviewRows: Array<{
-      priority: string;
-      matchedKeywords: string[];
-      currentStatus: string;
-      creatorIds: string[];
-      quotedPrices: string[];
-      nextAction: string;
-      preview: string;
-    }>;
+    leadReviewRows: LeadReviewRow[];
+    creatorProfiles?: CreatorProfileRow[];
   };
   artifacts?: {
     fileCount: number;
@@ -66,6 +100,188 @@ function parseLimitInput(value: string) {
   return parsed;
 }
 
+function normalizeCreatorKey(value: string) {
+  return String(value || "").trim().replace(/^@/, "").toLowerCase();
+}
+
+function clampConfidence(value: number) {
+  return Math.max(0.1, Math.min(0.98, Number(value.toFixed(2))));
+}
+
+function chooseConfidenceLabel(confidence: number): ConfidenceLabel {
+  if (confidence >= 0.78) return "high";
+  if (confidence >= 0.55) return "medium";
+  return "low";
+}
+
+function scoreLeadRow(row: LeadReviewRow, creatorId: string | null) {
+  let score = 0.24;
+  if (creatorId) score += 0.3;
+  if (row.platforms?.length) score += 0.18;
+  if (row.quotedPrices?.length) score += 0.16;
+  if ((row.messageCount || 0) > 1) score += 0.08;
+  if ((row.creatorIds || []).length > 1) score -= 0.12;
+  if (row.needsManualReview) score -= 0.08;
+  return clampConfidence(score);
+}
+
+function buildReviewReasons(row: LeadReviewRow, creatorId: string | null) {
+  const reasons: string[] = [];
+  if (!creatorId) reasons.push("缺达人ID");
+  if (!row.platforms?.length) reasons.push("缺平台");
+  if (!row.quotedPrices?.length) reasons.push("缺报价");
+  if ((row.creatorIds || []).length > 1) reasons.push("多达人候选");
+  if (row.needsManualReview) reasons.push("邮件需复核");
+  return reasons;
+}
+
+function buildClientCreatorProfilesFromLeadRows(rows: LeadReviewRow[]): CreatorProfileRow[] {
+  const profiles = new Map<string, any>();
+
+  rows.forEach((row, index) => {
+    const creatorIds = row.creatorIds?.length ? row.creatorIds : [null];
+    for (const creatorId of creatorIds) {
+      const normalizedCreator = creatorId ? normalizeCreatorKey(creatorId) : "";
+      const primaryPlatform = row.platforms?.[0] || "unknown";
+      const creatorKey = normalizedCreator ? `${primaryPlatform.toLowerCase()}:${normalizedCreator}` : `review:${row.conversationKey || index}`;
+      const existing = profiles.get(creatorKey) || {
+        creatorKey,
+        displayName: creatorId || "待确认达人",
+        primaryCreatorId: creatorId,
+        platforms: new Set<string>(),
+        matchedKeywords: new Set<string>(),
+        quotedPrices: new Set<string>(),
+        currentStatus: "",
+        latestReplyAt: null,
+        conversationCount: 0,
+        messageCount: 0,
+        confidenceScores: [] as number[],
+        reviewReasons: new Set<string>(),
+        conversationKeys: new Set<string>(),
+        preview: row.preview || "",
+      };
+
+      for (const platform of row.platforms || []) existing.platforms.add(platform);
+      for (const keyword of row.matchedKeywords || []) existing.matchedKeywords.add(keyword);
+      for (const price of row.quotedPrices || []) existing.quotedPrices.add(price);
+      for (const reason of buildReviewReasons(row, creatorId)) existing.reviewReasons.add(reason);
+      if (row.conversationKey) existing.conversationKeys.add(row.conversationKey);
+
+      existing.conversationCount += 1;
+      existing.messageCount += row.messageCount || 0;
+      existing.confidenceScores.push(scoreLeadRow(row, creatorId));
+      if (!existing.latestReplyAt || (row.latestReplyAt && row.latestReplyAt > existing.latestReplyAt)) {
+        existing.latestReplyAt = row.latestReplyAt || existing.latestReplyAt;
+        existing.currentStatus = row.currentStatus || existing.currentStatus;
+        existing.preview = row.preview || existing.preview;
+      } else if (!existing.currentStatus) {
+        existing.currentStatus = row.currentStatus || "";
+      }
+
+      profiles.set(creatorKey, existing);
+    }
+  });
+
+  return [...profiles.values()]
+    .map((profile) => {
+      const averageConfidence = profile.confidenceScores.length
+        ? profile.confidenceScores.reduce((sum: number, item: number) => sum + item, 0) / profile.confidenceScores.length
+        : 0.1;
+      const confidence = clampConfidence(averageConfidence + Math.min(0.12, Math.max(0, profile.conversationCount - 1) * 0.03));
+      const reviewReasons = [...profile.reviewReasons];
+      if (confidence < 0.55) reviewReasons.push("低置信度");
+      return {
+        creatorKey: profile.creatorKey,
+        displayName: profile.displayName,
+        primaryCreatorId: profile.primaryCreatorId,
+        platforms: [...profile.platforms].sort(),
+        matchedKeywords: [...profile.matchedKeywords].sort(),
+        quotedPrices: [...profile.quotedPrices].slice(0, 5),
+        currentStatus: profile.currentStatus || "待人工判断",
+        latestReplyAt: profile.latestReplyAt,
+        conversationCount: profile.conversationCount,
+        messageCount: profile.messageCount,
+        confidence,
+        confidenceLabel: chooseConfidenceLabel(confidence),
+        needsReview: reviewReasons.length > 0,
+        reviewReasons: [...new Set(reviewReasons)],
+        conversationKeys: [...profile.conversationKeys],
+        preview: profile.preview,
+      };
+    })
+    .sort((a, b) => Number(Boolean(b.primaryCreatorId)) - Number(Boolean(a.primaryCreatorId)) || b.confidence - a.confidence || b.messageCount - a.messageCount);
+}
+
+function joinText(values: string[] | undefined, fallback = "-") {
+  return values?.length ? values.join(" / ") : fallback;
+}
+
+function confidenceTone(label: ConfidenceLabel) {
+  if (label === "high") return "border-[rgba(52,211,153,0.22)] bg-[rgba(52,211,153,0.08)] text-[#9af2c5]";
+  if (label === "medium") return "border-[rgba(251,191,36,0.22)] bg-[rgba(251,191,36,0.08)] text-[#f8d98a]";
+  return "border-[rgba(248,113,113,0.22)] bg-[rgba(248,113,113,0.08)] text-[#fca5a5]";
+}
+
+function CreatorProfileList({ rows, showReasons, emptyLabel }: { rows: CreatorProfileRow[]; showReasons?: boolean; emptyLabel: string }) {
+  if (!rows.length) {
+    return (
+      <div className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-5 text-sm text-text-2">
+        {emptyLabel}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {rows.map((profile) => (
+        <div key={profile.creatorKey} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="max-w-full truncate text-sm font-semibold text-text-0">{profile.displayName || "待确认达人"}</div>
+                {profile.platforms.slice(0, 3).map((platform) => (
+                  <span key={platform} className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[11px] text-text-2">
+                    {platform}
+                  </span>
+                ))}
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${confidenceTone(profile.confidenceLabel)}`}>
+                  {Math.round(profile.confidence * 100)}%
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-2">
+                <span>{profile.currentStatus || "待人工判断"}</span>
+                <span>{joinText(profile.matchedKeywords, "无关键词")}</span>
+                <span>{joinText(profile.quotedPrices, "暂无报价")}</span>
+                {profile.latestReplyAt ? <span>{profile.latestReplyAt}</span> : null}
+              </div>
+            </div>
+            <div className="grid min-w-[172px] grid-cols-2 gap-2 text-right text-xs">
+              <div>
+                <div className="text-text-2">会话</div>
+                <div className="mt-1 font-semibold text-text-0">{profile.conversationCount}</div>
+              </div>
+              <div>
+                <div className="text-text-2">邮件</div>
+                <div className="mt-1 font-semibold text-text-0">{profile.messageCount}</div>
+              </div>
+            </div>
+          </div>
+          {profile.preview ? <div className="mt-3 max-h-10 overflow-hidden text-xs leading-5 text-text-1">{profile.preview}</div> : null}
+          {showReasons && profile.reviewReasons.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {profile.reviewReasons.map((reason) => (
+                <span key={reason} className="rounded-full border border-[rgba(248,113,113,0.18)] bg-[rgba(248,113,113,0.07)] px-2 py-0.5 text-[11px] text-[#fca5a5]">
+                  {reason}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function HistoryImportPanel() {
   const [imports, setImports] = useState<HistoryImportItem[]>([]);
   const [keywords, setKeywords] = useState("miniso skg duet");
@@ -77,6 +293,7 @@ export function HistoryImportPanel() {
     "/Volumes/GPFS/Users/a1234/Desktop/shared-mailbox-sync-export-20260415-113707/data/raw/partnerships_amagency.biz-b7630055",
   );
   const [localLimit, setLocalLimit] = useState("300");
+  const [activeResultView, setActiveResultView] = useState<ResultView>("leads");
 
   async function refresh() {
     const provider = await resolveHistoryImportProviderName();
@@ -166,11 +383,26 @@ export function HistoryImportPanel() {
   }
 
   const latest = imports[0] ?? null;
-  const previewRows = useMemo(() => latest?.result?.leadReviewRows?.slice(0, 50) ?? [], [latest]);
+  const leadRows = useMemo(() => latest?.result?.leadReviewRows ?? [], [latest]);
+  const previewRows = useMemo(() => leadRows.slice(0, 50), [leadRows]);
+  const creatorProfiles = useMemo(() => {
+    const serverProfiles = latest?.result?.creatorProfiles ?? [];
+    return serverProfiles.length ? serverProfiles : buildClientCreatorProfilesFromLeadRows(leadRows);
+  }, [latest, leadRows]);
+  const creatorRows = useMemo(() => creatorProfiles.filter((profile) => profile.primaryCreatorId).slice(0, 80), [creatorProfiles]);
+  const reviewRows = useMemo(() => creatorProfiles.filter((profile) => profile.needsReview).slice(0, 80), [creatorProfiles]);
+  const totalCreatorRows = creatorProfiles.filter((profile) => profile.primaryCreatorId).length;
+  const totalReviewRows = creatorProfiles.filter((profile) => profile.needsReview).length;
   const hasCompletedWithoutHits = Boolean(latest?.status === "completed" && latest.result && latest.result.stats.checked > 0 && latest.result.stats.parsed > 0 && latest.result.stats.failed === 0 && latest.result.stats.matched === 0);
   const failedItemCount = latest?.result?.items?.filter((item) => item.error).length ?? 0;
-  const totalLeadRows = latest?.result?.leadReviewRows?.length ?? 0;
+  const totalLeadRows = leadRows.length;
+  const creatorProfileCount = latest?.result?.stats.creatorProfiles ?? creatorProfiles.length;
   const checkedLimitLabel = latest?.limit ? `上限 ${latest.limit}` : "不限制";
+  const resultTabs: Array<{ key: ResultView; label: string; count: number }> = [
+    { key: "leads", label: "会话线索", count: totalLeadRows },
+    { key: "creators", label: "达人库", count: totalCreatorRows || creatorProfileCount },
+    { key: "review", label: "待复核", count: totalReviewRows },
+  ];
 
   return (
     <Card className="mt-4 p-5 sm:p-6">
@@ -264,30 +496,80 @@ export function HistoryImportPanel() {
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">检查邮件</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.checked}</div><div className="mt-1 text-xs text-text-2">{checkedLimitLabel}{latest.artifacts?.fileCount ? ` · 目录 ${latest.artifacts.fileCount}` : ""} · 成功 {latest.result.stats.parsed} · 失败 {latest.result.stats.failed}</div></div>
                 <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">关键词命中</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.matched}</div><div className="mt-1 text-xs text-text-2">过滤 {latest.result.stats.filteredOut}</div></div>
-                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">会话数</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.conversationGroups}</div></div>
-                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">待人工复核</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.manualReview}</div></div>
+                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">会话数</div><div className="mt-2 text-2xl font-semibold text-text-0">{latest.result.stats.conversationGroups}</div><div className="mt-1 text-xs text-text-2">线索 {totalLeadRows}</div></div>
+                <div className="rounded-[16px] bg-white/[0.03] px-4 py-4"><div className="text-[11px] uppercase tracking-[0.16em] text-text-2">达人库</div><div className="mt-2 text-2xl font-semibold text-text-0">{creatorProfileCount}</div><div className="mt-1 text-xs text-text-2">待复核 {totalReviewRows} · 原线索复核 {latest.result.stats.manualReview}</div></div>
               </div>
 
-              <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
-                线索预览：显示 {previewRows.length} / {totalLeadRows}
-              </div>
-
-              <div className="space-y-3">
-                {previewRows.map((row, index) => (
-                  <div key={index} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-4">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-text-2">
-                      <span>{row.priority}</span>
-                      <span>·</span>
-                      <span>{row.currentStatus}</span>
-                      <span>·</span>
-                      <span>{row.matchedKeywords.join(" / ")}</span>
-                    </div>
-                    <div className="mt-2 text-sm font-medium text-text-0">{row.creatorIds.join(" / ") || "待确认达人"}</div>
-                    <div className="mt-2 text-sm text-text-1">{row.preview}</div>
-                    <div className="mt-2 text-xs text-text-2">{row.nextAction}</div>
-                  </div>
+              <div className="flex flex-wrap gap-2 rounded-[16px] bg-white/[0.03] p-1">
+                {resultTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setActiveResultView(tab.key)}
+                    className={`inline-flex h-9 items-center justify-center rounded-[12px] px-3 text-sm transition ${
+                      activeResultView === tab.key
+                        ? "bg-white/[0.12] font-semibold text-text-0"
+                        : "text-text-2 hover:bg-white/[0.06] hover:text-text-0"
+                    }`}
+                  >
+                    {tab.label}
+                    <span className="ml-2 rounded-full bg-black/20 px-2 py-0.5 text-[11px]">{tab.count}</span>
+                  </button>
                 ))}
               </div>
+
+              {activeResultView === "leads" ? (
+                <>
+                  <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
+                    线索预览：显示 {previewRows.length} / {totalLeadRows}
+                  </div>
+
+                  <div className="space-y-3">
+                    {previewRows.map((row, index) => (
+                      <div key={row.conversationKey || index} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] px-4 py-4">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-text-2">
+                          <span>{row.priority}</span>
+                          <span>·</span>
+                          <span>{row.currentStatus}</span>
+                          <span>·</span>
+                          <span>{joinText(row.matchedKeywords)}</span>
+                          {row.platforms?.length ? (
+                            <>
+                              <span>·</span>
+                              <span>{joinText(row.platforms)}</span>
+                            </>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-sm font-medium text-text-0">{joinText(row.creatorIds, "待确认达人")}</div>
+                        <div className="mt-2 text-sm text-text-1">{row.preview}</div>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-2">
+                          <span>{row.nextAction}</span>
+                          {row.quotedPrices?.length ? <span>{joinText(row.quotedPrices)}</span> : null}
+                          {row.messageCount ? <span>{row.messageCount} 封</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
+
+              {activeResultView === "creators" ? (
+                <>
+                  <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
+                    达人库：显示 {creatorRows.length} / {totalCreatorRows || creatorProfileCount}
+                  </div>
+                  <CreatorProfileList rows={creatorRows} emptyLabel="当前结果还没有足够信息聚合成达人；可以放宽关键词或扫更多邮件。" />
+                </>
+              ) : null}
+
+              {activeResultView === "review" ? (
+                <>
+                  <div className="rounded-[16px] bg-white/[0.03] px-4 py-3 text-sm text-text-1">
+                    待复核：显示 {reviewRows.length} / {totalReviewRows}
+                  </div>
+                  <CreatorProfileList rows={reviewRows} showReasons emptyLabel="这一批没有需要人工补判断的达人线索。" />
+                </>
+              ) : null}
             </>
           ) : null}
         </div>

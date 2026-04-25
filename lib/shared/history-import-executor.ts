@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { extractFullBody } from "../server/historical-parse/extract-full-body";
 import { extractCoreFields } from "../server/historical-parse/extract-core-fields";
-import { buildConversationGroups, buildLeadReviewRows, collectKeywordHits } from "../server/historical-parse/build-review-results";
+import { buildConversationGroups, buildCreatorProfiles, buildLeadReviewRows, collectKeywordHits } from "../server/historical-parse/build-review-results";
 
 export type HistoryImportResult = {
   stats: {
@@ -16,10 +16,12 @@ export type HistoryImportResult = {
     withPrice: number;
     withCreator: number;
     manualReview: number;
+    creatorProfiles: number;
   };
   items: Array<Record<string, unknown>>;
   conversationGroups: Array<Record<string, unknown>>;
   leadReviewRows: Array<Record<string, unknown>>;
+  creatorProfiles: Array<Record<string, unknown>>;
 };
 
 class FatalHistoryImportError extends Error {}
@@ -101,6 +103,7 @@ export async function executeHistoryImport({ corpusPath, keywords = [], limit = 
     withPrice: 0,
     withCreator: 0,
     manualReview: 0,
+    creatorProfiles: 0,
   };
 
   for (const file of files) {
@@ -179,12 +182,15 @@ export async function executeHistoryImport({ corpusPath, keywords = [], limit = 
 
   const conversationGroups = buildConversationGroups(items as any);
   const leadReviewRows = buildLeadReviewRows(conversationGroups as any);
+  const creatorProfiles = buildCreatorProfiles(conversationGroups as any);
   stats.conversationGroups = conversationGroups.length;
+  stats.creatorProfiles = creatorProfiles.length;
 
   return {
     stats,
     items,
     conversationGroups: conversationGroups as Array<Record<string, unknown>>,
     leadReviewRows: leadReviewRows as Array<Record<string, unknown>>,
+    creatorProfiles: creatorProfiles as Array<Record<string, unknown>>,
   };
 }

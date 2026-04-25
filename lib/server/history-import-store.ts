@@ -7,6 +7,7 @@ type HistoryImportResult = {
   items: unknown[];
   conversationGroups: unknown[];
   leadReviewRows: unknown[];
+  creatorProfiles: unknown[];
 };
 
 export type HistoryImportItem = {

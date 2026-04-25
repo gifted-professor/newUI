@@ -33,7 +33,7 @@ async function listEmlFiles(rootPath, baseRoot = rootPath, files = []) {
   return files.sort();
 }
 
-async function writeCsvArtifacts(importId, leadReviewRows, conversationGroups) {
+async function writeCsvArtifacts(importId, leadReviewRows, conversationGroups, creatorProfiles) {
   assertSafeHistoryImportId(importId);
   const item = await getHistoryImport(importId);
   if (!item?.corpusPath) return null;
@@ -46,6 +46,7 @@ async function writeCsvArtifacts(importId, leadReviewRows, conversationGroups) {
   await mkdir(outputDir, { recursive: true });
   const leadCsvPath = path.join(outputDir, "historical_lead_review.csv");
   const conversationCsvPath = path.join(outputDir, "historical_conversation_groups.csv");
+  const creatorCsvPath = path.join(outputDir, "historical_creator_profiles.csv");
 
   function escapeCsvCell(value) {
     const raw = value == null ? "" : String(value);
@@ -133,9 +134,55 @@ async function writeCsvArtifacts(importId, leadReviewRows, conversationGroups) {
     ),
   ];
 
+  const creatorRows = [
+    [
+      "creatorKey",
+      "displayName",
+      "primaryCreatorId",
+      "platforms",
+      "matchedKeywords",
+      "quotedPrices",
+      "currentStatus",
+      "latestReplyAt",
+      "conversationCount",
+      "messageCount",
+      "confidence",
+      "confidenceLabel",
+      "needsReview",
+      "reviewReasons",
+      "conversationKeys",
+      "files",
+      "preview",
+    ].join(","),
+    ...(creatorProfiles || []).map((profile) =>
+      [
+        profile.creatorKey,
+        profile.displayName,
+        profile.primaryCreatorId || "",
+        (profile.platforms || []).join("|"),
+        (profile.matchedKeywords || []).join("|"),
+        (profile.quotedPrices || []).join("|"),
+        profile.currentStatus || "",
+        profile.latestReplyAt || "",
+        profile.conversationCount ?? "",
+        profile.messageCount ?? "",
+        profile.confidence ?? "",
+        profile.confidenceLabel || "",
+        profile.needsReview ? "true" : "false",
+        (profile.reviewReasons || []).join("|"),
+        (profile.conversationKeys || []).join("|"),
+        (profile.files || []).join("|"),
+        profile.preview || "",
+      ]
+        .map(escapeCsvCell)
+        .join(","),
+    ),
+  ];
+
   await writeFile(leadCsvPath, leadRows.join("\n"), "utf8");
   await writeFile(conversationCsvPath, conversationRows.join("\n"), "utf8");
-  return { leadCsvPath, conversationCsvPath };
+  await writeFile(creatorCsvPath, creatorRows.join("\n"), "utf8");
+  return { leadCsvPath, conversationCsvPath, creatorCsvPath };
 }
 
 export async function runHistoryImportTask({ id, corpusPath, keywords, limit = 0 }) {
@@ -145,7 +192,7 @@ export async function runHistoryImportTask({ id, corpusPath, keywords, limit = 0
   try {
     const { executeHistoryImport } = await import(executorModuleUrl);
     const result = await executeHistoryImport({ corpusPath, keywords, limit });
-    const artifacts = await writeCsvArtifacts(id, result.leadReviewRows, result.conversationGroups);
+    const artifacts = await writeCsvArtifacts(id, result.leadReviewRows, result.conversationGroups, result.creatorProfiles);
 
     await updateHistoryImport(id, {
       status: "completed",
